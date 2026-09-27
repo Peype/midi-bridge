@@ -1,0 +1,17 @@
+StageKontrol Bridge — macOS
+===========================
+
+Le bridge relie l'app StageKontrol (téléphone) à votre logiciel musical (Kontakt, Reaper…).
+
+1. Décompressez l'archive, puis ouvrez le dossier StageKontrol-Bridge.
+2. Premier lancement : clic droit (ou Ctrl+clic) sur StageKontrol-Bridge → Ouvrir → Ouvrir.
+   (L'application n'est pas signée par Apple : macOS demande une confirmation la première fois.)
+   Le tout premier démarrage peut prendre une vingtaine de secondes (vérification de macOS),
+   les suivants sont immédiats.
+   Si macOS demande d'autoriser les connexions entrantes, acceptez.
+3. Dans votre logiciel, choisissez l'entrée MIDI « stageKontrol » (créée par le bridge).
+4. Dans l'app : Réglages → « Bridges trouvés sur le réseau » → Utiliser.
+   Ou par câble USB : choisissez « MIDI » dans la notification USB du téléphone.
+
+Laissez la fenêtre Terminal du bridge ouverte pendant que vous jouez (Ctrl+C pour l'arrêter).
+Clavier maître branché sur le Mac : désactivez-le comme entrée MIDI directe dans votre logiciel.

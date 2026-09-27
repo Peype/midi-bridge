@@ -1,0 +1,9 @@
+# Environnement Python et construction (à ne jamais publier)
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+build/
+dist/
+*.zip
+.DS_Store
