@@ -116,14 +116,22 @@ class Bridge:
         for phone in list(self.usb_phones()):
             phone.send_control({"type": "key", "note": note})
 
+    def wifi_peer(self) -> str | None:
+        """Adresse du téléphone connecté en Wi-Fi, ou None."""
+        ws = self.current
+        if ws is None or not ws.remote_address:
+            return None
+        return str(ws.remote_address[0])
+
     def usb_phones(self):
         """Téléphones branchés en USB (fournis par l'InputHub, s'il y en a un)."""
         return self.hub.phones.values() if self.hub is not None else ()
 
-    async def start(self, host: str, port: int) -> Server:
+    async def start(self, host: str, port: int, process_request=None) -> Server:
         if self.router is not None:
             # Les touches arrivent sur le thread MIDI : on repasse sur la boucle asyncio pour l'envoi.
             loop = asyncio.get_running_loop()
             self.router.on_key = lambda note: loop.call_soon_threadsafe(self._send_key, note)
         self.loop = asyncio.get_running_loop()
-        return await serve(self.handle, host, port)
+        # process_request : page d'état HTTP servie sur le même port (voir status.py).
+        return await serve(self.handle, host, port, process_request=process_request)

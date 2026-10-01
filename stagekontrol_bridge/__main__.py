@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import webbrowser
 import platform
 import socket
 import sys
@@ -21,14 +22,14 @@ from .midi_out import (
     DryRunOutput,
     LockedOutput,
     MidiOutput,
-    MidiPortError,
+    WaitingOutput,
     keyboard_candidates,
-    open_output,
 )
 from .discovery import announce, withdraw
 from .inputs import InputHub
 from .router import Router
 from .server import Bridge
+from .status import StatusPage, build_snapshot
 
 DEFAULT_WS_PORT = 8765
 
@@ -54,13 +55,21 @@ def local_ips() -> list[str]:
 INPUT_REFRESH_S = 2.0
 
 
-async def run(output: MidiOutput, port: int, verbose: bool, router: Router | None, keyboard: str | None) -> None:
+async def run(
+    output: MidiOutput,
+    midi: WaitingOutput | DryRunOutput,
+    midi_port: str,
+    port: int,
+    verbose: bool,
+    router: Router | None,
+    keyboard: str | None,
+    open_browser: bool,
+) -> None:
     bridge = Bridge(output, verbose=verbose, router=router)
-    server = await bridge.start("0.0.0.0", port)
 
     # Entrées MIDI : claviers maîtres (vers le routage) et téléphones branchés en USB.
     hub = InputHub(
-        own_port=bridge_port_name(output),
+        own_port=midi_port,
         keyboard=keyboard,
         on_keyboard=router.handle if router is not None else None,
         on_phone_midi=lambda _phone, msg: bridge.forward(msg),
@@ -71,10 +80,32 @@ async def run(output: MidiOutput, port: int, verbose: bool, router: Router | Non
     hub.refresh()
 
     ips = local_ips()
+    name = socket.gethostname().split(".")[0] or "StageKontrol"
+    page = StatusPage(
+        lambda: build_snapshot(
+            name=name,
+            port=port,
+            ips=ips,
+            midi_name=midi.name,
+            midi_ok=getattr(midi, "available", True),
+            midi_error=getattr(midi, "error", None),
+            wifi_peer=bridge.wifi_peer(),
+            usb_phones=[p.name for p in bridge.usb_phones()],
+            keyboards=hub.keyboards(),
+            keyboard_routing=router is not None,
+        )
+    )
+    server = await bridge.start("0.0.0.0", port, process_request=page.process_request)
     announced = await announce(port, ips) if ips else None
+    status_url = f"http://localhost:{port}/"
 
     print(f"Bridge StageKontrol à l'écoute sur le port {port}.")
-    print(f"Sortie MIDI : {output.name}")
+    print(f"Page d'état (QR code à scanner avec le téléphone) : {status_url}")
+    if getattr(midi, "available", True):
+        print(f"Sortie MIDI : {midi.name}")
+    else:
+        print(f"Sortie MIDI : en attente du port « {midi.name} ».")
+        print(f"  {getattr(midi, 'error', '')}")
     if router is None:
         print("Clavier maître : désactivé (--no-keyboard)")
     else:
@@ -88,14 +119,19 @@ async def run(output: MidiOutput, port: int, verbose: bool, router: Router | Non
         print("Adresse IP locale introuvable : vérifiez que le PC est sur le réseau Wi-Fi.")
     if platform.system() == "Windows":
         print("Si Windows demande l'autorisation du pare-feu, acceptez pour les réseaux privés.")
-    print("Ctrl+C pour arrêter.\n", flush=True)
+    print("Ctrl+C (ou fermer cette fenêtre) pour arrêter.\n", flush=True)
+    if open_browser:
+        webbrowser.open(status_url)
 
-    async def watch_inputs() -> None:
+    async def watch() -> None:
         while True:
             await asyncio.sleep(INPUT_REFRESH_S)
             hub.refresh()
+            # Port MIDI créé après le lancement (loopMIDI) : on le prend aussitôt.
+            if isinstance(midi, WaitingOutput) and midi.retry():
+                bridge.log(f"+ port MIDI « {midi.name} » trouvé")
 
-    watcher = asyncio.create_task(watch_inputs())
+    watcher = asyncio.create_task(watch())
     try:
         async with server:
             await server.serve_forever()
@@ -103,11 +139,6 @@ async def run(output: MidiOutput, port: int, verbose: bool, router: Router | Non
         watcher.cancel()
         hub.close()
         await withdraw(announced)
-
-
-def bridge_port_name(output: MidiOutput) -> str:
-    """Nom du port du bridge, à ne pas écouter (sinon il recevrait sa propre sortie)."""
-    return output.name
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -121,6 +152,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--keyboard", help="nom (ou début du nom) de l'entrée MIDI du clavier maître")
     parser.add_argument("--no-keyboard", action="store_true", help="n'ouvre aucun clavier (pas de routage)")
     parser.add_argument("--list-midi", action="store_true", help="affiche les ports MIDI et quitte")
+    parser.add_argument("--no-browser", action="store_true", help="n'ouvre pas la page d'état au lancement")
     args = parser.parse_args(argv)
 
     if args.list_midi:
@@ -132,18 +164,19 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  - {n}")
         return 0
 
-    try:
-        output: MidiOutput = LockedOutput(DryRunOutput() if args.dry_run else open_output(args.midi_port))
-    except MidiPortError as e:
-        print(e, file=sys.stderr)
-        return 1
+    # Le port MIDI peut manquer au lancement (loopMIDI pas encore configuré) : le bridge démarre quand
+    # même, la page d'état explique quoi faire et le port est pris dès qu'il existe.
+    midi: WaitingOutput | DryRunOutput = DryRunOutput() if args.dry_run else WaitingOutput(args.midi_port)
+    output: MidiOutput = LockedOutput(midi)
 
     # Routage du clavier maître : actif sauf --no-keyboard ; le clavier est détecté (ou branché) en
     # cours de route. --keyboard limite le routage à une entrée précise.
     router: Router | None = None if args.no_keyboard else Router(output.send)
 
     try:
-        asyncio.run(run(output, args.port, not args.quiet, router, args.keyboard))
+        asyncio.run(
+            run(output, midi, args.midi_port, args.port, not args.quiet, router, args.keyboard, not args.no_browser)
+        )
     except KeyboardInterrupt:
         print("\nArrêt du bridge.")
     except OSError as e:

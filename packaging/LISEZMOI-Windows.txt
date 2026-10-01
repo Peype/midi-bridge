@@ -3,15 +3,18 @@ StageKontrol Bridge — Windows
 
 Le bridge relie l'app StageKontrol (téléphone) à votre logiciel musical (Kontakt, Reaper…).
 
-1. Installez loopMIDI (gratuit) : https://www.tobias-erichsen.de/software/loopmidi.html
-   Ouvrez-le et créez un port nommé exactement : stageKontrol
-2. Double-cliquez sur StageKontrol-Bridge.exe (dans le dossier StageKontrol-Bridge).
-   Si Windows demande l'autorisation du pare-feu, acceptez pour les réseaux privés.
+1. Double-cliquez sur StageKontrol-Bridge.exe (dans le dossier StageKontrol-Bridge).
+   Une page s'ouvre dans votre navigateur : elle vous guide pour la suite.
    Si Windows SmartScreen affiche « Windows a protégé votre ordinateur » :
    « Informations complémentaires » → « Exécuter quand même ».
-3. Dans votre logiciel, choisissez l'entrée MIDI « stageKontrol ».
-4. Dans l'app : Réglages → « Bridges trouvés sur le réseau » → Utiliser.
-   Ou par câble USB : choisissez « MIDI » dans la notification USB du téléphone.
+   Si Windows demande l'autorisation du pare-feu, acceptez pour les réseaux privés.
+2. Une seule fois : installez loopMIDI (gratuit), ouvrez-le et créez un port nommé
+   exactement « stageKontrol » (la page montre comment). Le bridge le prend aussitôt,
+   sans redémarrer. Dans loopMIDI, activez le démarrage avec Windows.
+3. Scannez le QR code de la page avec l'appareil photo du téléphone : l'app se connecte.
+   (Même Wi-Fi pour le téléphone et le PC ; ou câble USB, puis « MIDI » sur le téléphone.)
+4. Dans votre logiciel, choisissez l'entrée MIDI « stageKontrol ».
 
-Laissez la fenêtre du bridge ouverte pendant que vous jouez (Ctrl+C pour l'arrêter).
+Laissez la fenêtre du bridge ouverte pendant que vous jouez ; fermez-la pour l'arrêter.
+Page d'état à tout moment : http://localhost:8765/
 Clavier maître branché sur le PC : désactivez-le comme entrée MIDI directe dans votre logiciel.

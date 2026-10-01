@@ -20,6 +20,17 @@ La suite de ce document s'adresse aux développeurs (lancer le bridge depuis le 
 
 Dans le logiciel musical, choisissez l'entrée MIDI **stageKontrol**.
 
+## Page d'état et QR code
+
+Au lancement, le bridge ouvre sa page d'état dans le navigateur (http://localhost:8765/, même port
+que le WebSocket ; `--no-browser` pour ne pas l'ouvrir). Elle affiche :
+
+- un **QR code** à scanner avec l'appareil photo du téléphone : il ouvre l'app sur
+  `stagekontrol://connect?host=…&port=…&name=…`, qui enregistre l'adresse et se connecte ;
+- l'appareil connecté (Wi-Fi ou USB) et les claviers détectés ;
+- l'état du port MIDI. Sur Windows, si le port loopMIDI manque, le bridge ne s'arrête plus : la
+  page explique comment le créer, et le bridge le prend dès qu'il existe (vérifié toutes les 2 s).
+
 ## Connexion : Wi-Fi (trouvé automatiquement) ou câble USB
 
 - **Wi-Fi** : le bridge s'annonce sur le réseau (mDNS, service `_stagekontrol._tcp`). Dans l'app,
@@ -56,6 +67,7 @@ doivent être sur le même réseau Wi-Fi.
 | `--midi-port stageKontrol` | nom du port MIDI |
 | `--dry-run` | sans MIDI : affiche seulement les messages reçus |
 | `--quiet` | n'affiche pas chaque message MIDI |
+| `--no-browser` | n'ouvre pas la page d'état au lancement |
 
 Un seul appareil à la fois : si un deuxième appareil se connecte, il remplace le premier, qui
 affiche « Remplacé » (le toucher reprend la main).

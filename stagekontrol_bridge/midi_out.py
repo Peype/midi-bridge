@@ -45,7 +45,7 @@ def open_output(name: str = DEFAULT_PORT_NAME, system: str | None = None) -> Mid
             listed = "\n".join(f"  - {n}" for n in available) or "  (aucun)"
             raise MidiPortError(
                 f"Port MIDI « {name} » introuvable.\n"
-                f"Ouvrez loopMIDI, créez un port nommé exactement « {name} », puis relancez le bridge.\n"
+                f"Ouvrez loopMIDI, créez un port nommé exactement « {name} » : le bridge le prendra aussitôt.\n"
                 f"Ports MIDI disponibles :\n{listed}"
             )
         return mido.open_output(found)
@@ -70,13 +70,57 @@ class DryRunOutput:
         pass
 
 
+class WaitingOutput:
+    """Sortie qui attend son port : sur Windows, le port loopMIDI peut être créé après le lancement du
+    bridge. Tant qu'il manque, les messages sont ignorés et `error` explique quoi faire ; `retry()`
+    (appelé régulièrement) l'ouvre dès qu'il existe."""
+
+    def __init__(self, port_name: str, opener: Callable[[str], MidiOutput] = open_output) -> None:
+        self.port_name = port_name
+        self._opener = opener
+        self._port: MidiOutput | None = None
+        self.error: str | None = None
+        self.retry()
+
+    @property
+    def available(self) -> bool:
+        return self._port is not None
+
+    @property
+    def name(self) -> str:
+        return self._port.name if self._port is not None else self.port_name
+
+    def retry(self) -> bool:
+        """Tente d'ouvrir le port s'il ne l'est pas ; vrai s'il vient juste d'être ouvert."""
+        if self._port is not None:
+            return False
+        try:
+            self._port = self._opener(self.port_name)
+        except MidiPortError as e:
+            self.error = str(e)
+            return False
+        self.error = None
+        return True
+
+    def send(self, message: mido.Message) -> None:
+        if self._port is not None:
+            self._port.send(message)
+
+    def close(self) -> None:
+        if self._port is not None:
+            self._port.close()
+
+
 class LockedOutput:
     """Sortie partagée par l'app (WebSocket) et le clavier (thread MIDI) : un envoi à la fois."""
 
     def __init__(self, output: MidiOutput) -> None:
         self._output = output
         self._lock = threading.Lock()
-        self.name = output.name
+
+    @property
+    def name(self) -> str:
+        return self._output.name
 
     def send(self, message: mido.Message) -> None:
         with self._lock:

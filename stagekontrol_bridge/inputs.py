@@ -74,6 +74,11 @@ class InputHub:
             return False
         return self.keyboard is None or name == self.keyboard or name.startswith(self.keyboard)
 
+    def keyboards(self) -> list[str]:
+        """Entrées MIDI traitées comme claviers maîtres (pour la page d'état)."""
+        with self._lock:
+            return [n for n in self._inputs if self.is_keyboard(n)]
+
     def refresh(self) -> None:
         """Ouvre les nouvelles entrées MIDI et oublie celles qui ont disparu."""
         names = [n for n in self._list_inputs() if not n.startswith(self.own_port)]
