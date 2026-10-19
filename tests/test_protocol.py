@@ -67,3 +67,17 @@ def test_description_lisible_canal_1_a_16():
     assert describe(
         midi('{"type":"midi","message":"note","channel":16,"note":38,"velocity":0,"state":"off"}')
     ) == "Note Off 38 vél. 0  (canal 16)"
+
+
+def test_pitch_bend():
+    from stagekontrol_bridge.protocol import describe, to_midi
+
+    msg = to_midi({"type": "midi", "message": "pitchbend", "channel": 2, "value": -8192})
+    assert (msg.type, msg.channel, msg.pitch) == ("pitchwheel", 1, -8192)
+    assert describe(msg) == "Pitch Bend -8192  (canal 2)"
+    import pytest
+
+    from stagekontrol_bridge.protocol import ProtocolError
+
+    with pytest.raises(ProtocolError):
+        to_midi({"type": "midi", "message": "pitchbend", "channel": 1, "value": 9000})

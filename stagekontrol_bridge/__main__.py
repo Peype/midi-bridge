@@ -14,6 +14,7 @@ import webbrowser
 import platform
 import socket
 import sys
+from pathlib import Path
 
 import mido
 
@@ -27,6 +28,7 @@ from .midi_out import (
 )
 from .discovery import announce, withdraw
 from .inputs import InputHub
+from .rhythm import DEFAULT_FOLDER, RhythmBox
 from .router import Router
 from .server import Bridge
 from .status import StatusPage, build_snapshot
@@ -64,8 +66,15 @@ async def run(
     router: Router | None,
     keyboard: str | None,
     open_browser: bool,
+    rhythms_folder: Path = DEFAULT_FOLDER,
 ) -> None:
     bridge = Bridge(output, verbose=verbose, router=router)
+    # Boîte à rythme : le dossier est créé s'il manque (l'utilisateur y dépose ses fichiers .mid).
+    try:
+        rhythms_folder.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    bridge.rhythms = RhythmBox(rhythms_folder, output.send, broadcast=bridge.broadcast, log=bridge.log)
 
     # Entrées MIDI : claviers maîtres (vers le routage) et téléphones branchés en USB.
     hub = InputHub(
@@ -112,6 +121,8 @@ async def run(
         print(f"Clavier maître : {keyboard or 'toutes les entrées MIDI (hors téléphone)'}, routé vers les pistes actives")
         print("  → Dans le logiciel, désactivez le clavier comme entrée MIDI directe (sinon notes en double).")
     print("Câble USB : branchez le téléphone en mode « MIDI » ; il est reconnu automatiquement.")
+    count = len(bridge.rhythms.library.scan())
+    print(f"Rythmes (fichiers « Style - Partie.mid ») : {rhythms_folder} — {count} style(s)")
     if ips:
         print("Adresse(s) IP (Wi-Fi) : " + ", ".join(ips))
         print("  → L'app trouve le bridge toute seule (Réglages)" + ("" if announced else " — sauf : zeroconf absent, saisissez l'IP"))
@@ -137,6 +148,7 @@ async def run(
             await server.serve_forever()
     finally:
         watcher.cancel()
+        bridge.rhythms.player.stop()
         hub.close()
         await withdraw(announced)
 
@@ -153,6 +165,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-keyboard", action="store_true", help="n'ouvre aucun clavier (pas de routage)")
     parser.add_argument("--list-midi", action="store_true", help="affiche les ports MIDI et quitte")
     parser.add_argument("--no-browser", action="store_true", help="n'ouvre pas la page d'état au lancement")
+    parser.add_argument(
+        "--rhythms", type=Path, default=DEFAULT_FOLDER, help=f"dossier des rythmes .mid ({DEFAULT_FOLDER})"
+    )
     args = parser.parse_args(argv)
 
     if args.list_midi:
@@ -175,7 +190,17 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         asyncio.run(
-            run(output, midi, args.midi_port, args.port, not args.quiet, router, args.keyboard, not args.no_browser)
+            run(
+                output,
+                midi,
+                args.midi_port,
+                args.port,
+                not args.quiet,
+                router,
+                args.keyboard,
+                not args.no_browser,
+                args.rhythms.expanduser(),
+            )
         )
     except KeyboardInterrupt:
         print("\nArrêt du bridge.")

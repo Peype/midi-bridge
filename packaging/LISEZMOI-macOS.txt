@@ -15,3 +15,7 @@ Le bridge relie l'app StageKontrol (téléphone) à votre logiciel musical (Kont
 Laissez la fenêtre Terminal du bridge ouverte pendant que vous jouez ; fermez-la pour l'arrêter.
 Page d'état à tout moment : http://localhost:8765/
 Clavier maître branché sur le Mac : désactivez-le comme entrée MIDI directe dans votre logiciel.
+
+Boîte à rythme : déposez vos rythmes de batterie (fichiers MIDI) dans le dossier
+StageKontrol/Rythmes de votre dossier personnel, nommés « Style - Partie.mid »
+(ex. « Salegy - A.mid », « Salegy - Break.mid »). L'app les liste dans « Rythme ».

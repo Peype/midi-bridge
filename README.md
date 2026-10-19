@@ -106,6 +106,22 @@ CC (ex. le fader de volume du clavier, CC 7) sont ignorés pour ne pas écraser 
 | `--no-keyboard` | pas de routage du clavier |
 | `--list-midi` | affiche les ports MIDI et quitte |
 
+## Boîte à rythme (fichiers MIDI)
+
+Le bridge joue en boucle des rythmes de batterie, pilotés depuis l'app (bouton « Rythme » de la
+Console). Les coups partent de l'horloge du PC : le Wi-Fi ne les décale jamais.
+
+- Dossier : `~/StageKontrol/Rythmes` (créé au lancement), ou `--rhythms <dossier>`.
+- Une partie par fichier MIDI, nommé `Style - Partie.mid` : `Salegy - A.mid`, `Salegy - B.mid`,
+  `Salegy - Break.mid`, `Salegy - Intro.mid`, `Salegy - Fin.mid`. Un fichier sans ` - ` est la
+  partie A. Synonymes acceptés : Fill / Roulement = Break, Ending / Outro = Fin.
+- A, B, C tournent en boucle ; Intro enchaîne sur A ; Break joue une fois puis revient ; Fin arrête.
+  Changer de partie prend effet au début de la mesure suivante.
+- Le groove du fichier est rejoué tel quel (mesure lue dans le fichier : 4/4, 12/8…, longueur
+  arrondie à la mesure). Le tempo vient de l'app (celui du métronome), les notes partent sur le
+  canal choisi dans l'app (10 par défaut), avec un volume appliqué aux vélocités.
+- Le rythme continue si le téléphone se déconnecte ; Stop l'arrête.
+
 ## Vérifier sans logiciel musical
 
 - macOS : [MIDI Monitor](https://www.snoize.com/midimonitor/) (Snoize), source « stageKontrol ».
@@ -119,8 +135,16 @@ Canaux en 1–16 dans le JSON ; seul le bridge les convertit en 0–15.
 { "type": "midi", "message": "cc", "channel": 1, "number": 7, "value": 90 }
 { "type": "midi", "message": "note", "channel": 16, "note": 38, "velocity": 127, "state": "on" }
 { "type": "midi", "message": "program", "channel": 1, "program": 2 }
+{ "type": "midi", "message": "pitchbend", "channel": 1, "value": -4096 }
 { "type": "ping" }
 { "type": "routing", "targets": [{ "channel": 1, "octave": 1, "low": 0, "high": 59 }, { "channel": 2, "octave": 0, "low": 60, "high": 127 }] }
+{ "type": "rhythm-list" }
+{ "type": "rhythm", "action": "play", "style": "Salegy", "part": "A", "tempo": 96, "channel": 10, "volume": 100 }
+{ "type": "rhythm", "action": "part", "part": "Break" }
+{ "type": "rhythm", "action": "set", "tempo": 100 }
+{ "type": "rhythm", "action": "stop" }
+{ "type": "rhythm", "action": "sync" }
+{ "type": "time", "t": 123456.7 }
 ```
 
 Câble USB : les messages MIDI passent en octets MIDI ; les autres (`ping`, `pong`, `routing`,
@@ -130,9 +154,21 @@ Envoyé par le bridge à l'app :
 
 ```json
 { "type": "key", "note": 60 }
+{ "type": "rhythms", "folder": "…/Rythmes", "styles": [{ "name": "Salegy", "parts": ["A", "B", "Break"] }] }
+{ "type": "rhythm-state", "playing": true, "style": "Salegy", "part": "A", "next": "Break" }
+{ "type": "rhythm-error", "message": "…" }
+{ "type": "time", "t": 123456.7, "server": 98765.4 }
+{ "type": "rhythm-clock", "at": 98800.0, "tempo": 120 }
 ```
 
+- `time` : heure du bridge (ms), pour que l'app mesure le décalage entre les deux horloges.
+- `rhythm-clock` : début d'une mesure de la batterie, sur la même horloge ; l'app y cale son click.
+- `play` accepte `delay` (s) : départ retardé (décompte du click). `sync` réannonce la mesure en cours.
+
+- `rhythm` : `tempo` en noires par minute ; `part` change à la mesure suivante.
+
 - `note` avec `"state": "off"` envoie un vrai Note Off (0x80).
+- `pitchbend` : -8192 (bas) … 0 (centre) … 8191 (haut).
 - `ping` → le bridge répond `{ "type": "pong" }` (l'app coupe sans pong pendant 5 s).
 - Un message invalide est ignoré et signalé dans le terminal.
 - Code de fermeture `4001` : connexion remplacée par un autre appareil.

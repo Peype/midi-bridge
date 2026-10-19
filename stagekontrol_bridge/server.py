@@ -7,6 +7,7 @@ code CLOSE_REPLACED (l'app remplacée ne se reconnecte pas d'elle-même).
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime
 from typing import Callable
 
@@ -26,6 +27,7 @@ from .protocol import (
     to_midi,
     to_targets,
 )
+from .rhythm import RhythmBox, is_rhythm
 from .router import Router
 
 Log = Callable[[str], None]
@@ -55,6 +57,9 @@ class Bridge:
         self.current: ServerConnection | None = None
         # Entrées MIDI (claviers, téléphones en USB), branchées par __main__.
         self.hub = None
+        # Boîte à rythme (fichiers MIDI joués par le bridge), branchée par __main__.
+        self.rhythms: RhythmBox | None = None
+        self.loop: asyncio.AbstractEventLoop | None = None
 
     async def handle(self, ws: ServerConnection) -> None:
         peer = f"{ws.remote_address[0]}:{ws.remote_address[1]}" if ws.remote_address else "?"
@@ -96,6 +101,10 @@ class Bridge:
                     self.router.set_targets(targets)
                     self.log(f"= clavier → {describe_targets(targets)}")
                 return
+            if is_rhythm(msg):
+                if self.rhythms is not None:
+                    self.rhythms.handle(msg, lambda value: reply(json.dumps(value)))
+                return
             midi = to_midi(msg)
         except ProtocolError as e:
             self.log(f"? message ignoré : {e}")
@@ -115,6 +124,21 @@ class Bridge:
         # Téléphones branchés en USB : même message, en SysEx.
         for phone in list(self.usb_phones()):
             phone.send_control({"type": "key", "note": note})
+
+    def broadcast(self, value: dict) -> None:
+        """Message pour l'app (Wi-Fi et USB), envoyable depuis n'importe quel fil d'exécution."""
+        loop = self.loop
+        if loop is None:
+            return
+
+        def send() -> None:
+            ws = self.current
+            if ws is not None:
+                asyncio.ensure_future(ws.send(json.dumps(value)))
+            for phone in list(self.usb_phones()):
+                phone.send_control(value)
+
+        loop.call_soon_threadsafe(send)
 
     def wifi_peer(self) -> str | None:
         """Adresse du téléphone connecté en Wi-Fi, ou None."""

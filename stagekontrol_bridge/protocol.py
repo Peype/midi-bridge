@@ -4,6 +4,7 @@ Messages reçus de l'app (canaux en 1–16 dans le JSON ; seul le bridge convert
     {"type": "midi", "message": "cc", "channel": 1, "number": 74, "value": 96}
     {"type": "midi", "message": "note", "channel": 16, "note": 38, "velocity": 127, "state": "on"}
     {"type": "midi", "message": "program", "channel": 1, "program": 2}
+    {"type": "midi", "message": "pitchbend", "channel": 1, "value": -4096}  (−8192…8191, 0 = centre)
     {"type": "ping"}  → le bridge répond {"type": "pong"}
     {"type": "routing", "targets": [{"channel": 1, "octave": 0, "low": 60, "high": 127}, …]}
         → routage du clavier maître (voir router.py) ; low/high (zone) facultatifs, 0–127 par défaut
@@ -80,6 +81,9 @@ def to_midi(msg: dict[str, Any]) -> mido.Message:
         )
     if kind == "program":
         return mido.Message("program_change", channel=channel, program=_int(msg, "program", 0, 127))
+    if kind == "pitchbend":
+        # -8192 (bas) … 0 (centre) … 8191 (haut), comme mido.
+        return mido.Message("pitchwheel", channel=channel, pitch=_int(msg, "value", -8192, 8191))
 
     raise ProtocolError(f"message MIDI inconnu : {kind!r}")
 
@@ -95,6 +99,8 @@ def describe(m: mido.Message) -> str:
         return f"Note Off {m.note} vél. {m.velocity}  ({ch})"
     if m.type == "program_change":
         return f"Program Change {m.program}  ({ch})"
+    if m.type == "pitchwheel":
+        return f"Pitch Bend {m.pitch:+d}  ({ch})"
     return str(m)
 
 
