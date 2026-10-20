@@ -24,7 +24,14 @@ Règles de jeu :
 
 from __future__ import annotations
 
+import base64
+import binascii
+import io
 import math
+import os
+import platform
+import re
+import subprocess
 import threading
 import time
 from dataclasses import dataclass
@@ -53,6 +60,11 @@ PART_ALIASES = {
 PART_ORDER = ["Intro", "A", "B", "C", "Break", "Fin"]
 # Parties jouées une seule fois (les autres tournent en boucle).
 ONCE_PARTS = frozenset({"Intro", "Break", "Fin"})
+
+# Import depuis la page d'état : taille maximale d'un fichier, et parties proposées.
+MAX_FILE_BYTES = 512 * 1024
+MAX_STYLE_LENGTH = 40
+STANDARD_PARTS = ("Intro", "A", "B", "C", "Break", "Fin")
 
 MIN_TEMPO, MAX_TEMPO = 20.0, 400.0
 START_DELAY_S = 0.05
@@ -125,6 +137,32 @@ def part_key(part: str) -> tuple[int, str]:
     return (PART_ORDER.index(part) if part in PART_ORDER else len(PART_ORDER), part)
 
 
+def clean_style(name: str) -> str:
+    """Nom de style utilisable comme nom de fichier (Windows compris) ; chaîne vide = invalide."""
+    name = re.sub(r'[\\/:*?"<>|\x00-\x1f]', " ", name)
+    name = re.sub(r"\s+", " ", name).strip(" .")
+    return name[:MAX_STYLE_LENGTH]
+
+
+def clean_part(part: str) -> str:
+    """Partie normalisée (A, Break, Fin…) ; les synonymes sont ramenés au nom affiché."""
+    part = clean_style(part)
+    return PART_ALIASES.get(part.lower(), part)
+
+
+def read_bytes(data: bytes) -> Pattern:
+    """Vérifie qu'un fichier reçu est un MIDI lisible avec des notes (lève RhythmError sinon)."""
+    if not data:
+        raise RhythmError("fichier vide")
+    if len(data) > MAX_FILE_BYTES:
+        raise RhythmError(f"fichier trop gros (plus de {MAX_FILE_BYTES // 1024} Ko)")
+    try:
+        mid = mido.MidiFile(file=io.BytesIO(data))
+    except (OSError, ValueError, EOFError, KeyError) as e:
+        raise RhythmError(f"ce n'est pas un fichier MIDI lisible ({e})") from e
+    return read_pattern(mid)
+
+
 class Library:
     """Rythmes du dossier : style → partie → fichier. Relu à chaque demande de l'app."""
 
@@ -146,6 +184,75 @@ class Library:
 
     def describe(self) -> list[dict[str, Any]]:
         return [{"name": s, "parts": sorted(parts, key=part_key)} for s, parts in self.styles.items()]
+
+    # Gestion depuis la page d'état (import, suppression, renommage) ----------------------------
+
+    def save(self, style: str, part: str, data: bytes) -> tuple[str, str]:
+        """
+        Enregistre un fichier MIDI reçu sous « Style - Partie.mid », après vérification. Remplace la
+        partie si elle existe déjà (quelle que soit l'extension ou la casse du nom existant).
+        """
+        style, part = clean_style(style), clean_part(part)
+        if not style:
+            raise RhythmError("nom de style manquant")
+        if not part:
+            raise RhythmError("partie manquante")
+        read_bytes(data)
+        self.folder.mkdir(parents=True, exist_ok=True)
+        self.scan()
+        # Style déjà présent avec d'autres majuscules : on garde son nom (pas de doublon).
+        style = self._style_key(style) or style
+        for existing_part, path in self.styles.get(style, {}).items():
+            if existing_part == part:
+                path.unlink(missing_ok=True)
+        target = self.folder / f"{style} - {part}.mid"
+        target.write_bytes(data)
+        self.scan()
+        return style, part
+
+    def delete(self, style: str, part: str | None = None) -> int:
+        """Supprime une partie, ou tout le style ; renvoie le nombre de fichiers supprimés."""
+        self.scan()
+        parts = self.styles.get(style, {})
+        removed = 0
+        for name, path in list(parts.items()):
+            if part is None or name == part:
+                path.unlink(missing_ok=True)
+                removed += 1
+        self.scan()
+        return removed
+
+    def rename(self, style: str, new_name: str) -> str:
+        """Renomme un style (tous ses fichiers) ; refuse un nom déjà pris."""
+        new_name = clean_style(new_name)
+        if not new_name:
+            raise RhythmError("nouveau nom manquant")
+        self.scan()
+        parts = self.styles.get(style)
+        if not parts:
+            raise RhythmError(f"rythme « {style} » introuvable")
+        other = self._style_key(new_name)
+        if other is not None and other != style:
+            raise RhythmError(f"un rythme « {other} » existe déjà")
+        for part, path in parts.items():
+            path.rename(path.with_name(f"{new_name} - {part}{path.suffix.lower()}"))
+        self.scan()
+        return new_name
+
+    def _style_key(self, style: str) -> str | None:
+        """Style existant de même nom, sans tenir compte des majuscules."""
+        return next((s for s in self.styles if s.lower() == style.lower()), None)
+
+    def open_folder(self) -> None:
+        """Ouvre le dossier dans le Finder / l'Explorateur (page d'état, sur l'ordinateur)."""
+        self.folder.mkdir(parents=True, exist_ok=True)
+        system = platform.system()
+        if system == "Windows":
+            os.startfile(self.folder)  # type: ignore[attr-defined]
+        elif system == "Darwin":
+            subprocess.Popen(["open", str(self.folder)])
+        else:
+            subprocess.Popen(["xdg-open", str(self.folder)])
 
     def load(self, style: str) -> dict[str, Pattern]:
         """Toutes les parties d'un style (lecture des fichiers, gardés en mémoire tant qu'inchangés)."""
@@ -477,7 +584,55 @@ class RhythmBox:
 
     def listing(self) -> dict[str, Any]:
         self.library.scan()
-        return {"type": "rhythms", "folder": str(self.library.folder), "styles": self.library.describe()}
+        from . import __version__
+
+        # La version permet à l'app de savoir ce que ce bridge comprend (ex. correction de vélocité).
+        return {
+            "type": "rhythms",
+            "folder": str(self.library.folder),
+            "styles": self.library.describe(),
+            "version": __version__,
+        }
+
+    def publish(self) -> None:
+        """Nouvelle liste des rythmes pour le téléphone et les pages ouvertes (après un import…)."""
+        self.broadcast(self.listing())
+
+    def admin(self, msg: dict[str, Any], reply: Callable[[dict[str, Any]], None]) -> None:
+        """Gestion des rythmes depuis la page d'état (sur l'ordinateur) : import, suppression…"""
+        kind = msg.get("type")
+        name = msg.get("name")  # nom du fichier importé, renvoyé tel quel pour l'affichage
+        try:
+            if kind == "rhythm-list":
+                reply(self.listing())
+                return
+            if kind == "rhythm-open-folder":
+                self.library.open_folder()
+                return
+            if kind == "rhythm-upload":
+                try:
+                    data = base64.b64decode(str(msg.get("data") or ""), validate=True)
+                except (binascii.Error, ValueError) as e:
+                    raise RhythmError("fichier mal transmis") from e
+                style, part = self.library.save(str(msg.get("style") or ""), str(msg.get("part") or ""), data)
+                self.log(f"+ rythme importé : {style} - {part}")
+                reply({"type": "rhythm-saved", "style": style, "part": part, "name": name})
+            elif kind == "rhythm-delete":
+                style = str(msg.get("style") or "")
+                part = msg.get("part") if isinstance(msg.get("part"), str) else None
+                if not self.library.delete(style, part):
+                    raise RhythmError("rien à supprimer")
+                self.log(f"- rythme supprimé : {style}" + (f" - {part}" if part else ""))
+            elif kind == "rhythm-rename":
+                style = str(msg.get("style") or "")
+                new_name = self.library.rename(style, str(msg.get("to") or ""))
+                self.log(f"~ rythme renommé : {style} → {new_name}")
+            else:
+                raise RhythmError(f"demande inconnue : {kind!r}")
+        except RhythmError as e:
+            reply({"type": "rhythm-error", "message": str(e), "name": name})
+            return
+        self.publish()
 
     def handle(self, msg: dict[str, Any], reply: Callable[[dict[str, Any]], None]) -> None:
         """Message `rhythm-list` ou `rhythm` de l'app. Les erreurs sont renvoyées à l'app."""

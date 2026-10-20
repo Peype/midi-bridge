@@ -149,11 +149,31 @@ def test_seuls_les_controles_de_jeu_passent():
 def test_touche_signalee_pour_l_apprentissage():
     r, _ = make()
     keys = []
-    r.on_key = keys.append
+    r.on_key = lambda note, _velocity, _sent: keys.append(note)
     r.handle(on(60))
     r.handle(off(60))
     r.handle(on(36))
     assert keys == [60, 36]
+
+
+def test_correction_de_velocite_par_touche():
+    from stagekontrol_bridge.router import adjust_velocity
+
+    assert adjust_velocity(100, -20) == 80
+    assert adjust_velocity(100, 50) == 127  # bornée à 127
+    assert adjust_velocity(1, -50) == 1  # jamais muette
+    assert adjust_velocity(64, 0) == 64
+    r, sent = make()
+    r.set_targets([Target(1, 0), Target(2, -1)])
+    r.set_key_velocity({62: -20})
+    keys = []
+    r.on_key = lambda note, velocity, out: keys.append((note, velocity, out))
+    r.handle(mido.Message("note_on", note=62, velocity=100))
+    r.handle(mido.Message("note_on", note=60, velocity=100))
+    ons = [(m.channel, m.note, m.velocity) for m in sent if m.type == "note_on"]
+    # La correction suit la touche jouée (62), sur toutes les pistes, même transposée.
+    assert ons == [(0, 62, 80), (1, 50, 80), (0, 60, 100), (1, 48, 100)]
+    assert keys == [(62, 100, 80), (60, 100, 100)]
 
 
 def test_routage_avec_zone():

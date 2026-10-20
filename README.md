@@ -121,6 +121,12 @@ Console). Les coups partent de l'horloge du PC : le Wi-Fi ne les décale jamais.
   arrondie à la mesure). Le tempo vient de l'app (celui du métronome), les notes partent sur le
   canal choisi dans l'app (10 par défaut), avec un volume appliqué aux vélocités.
 - Le rythme continue si le téléphone se déconnecte ; Stop l'arrête.
+- **Import facile (1.3.0)** : sur la page d'état (`http://localhost:8765/`), section « Rythmes », glissez
+  vos fichiers .mid, choisissez le style et la partie (devinés depuis le nom du fichier), puis
+  « Importer » : le bridge vérifie le fichier et le range sous le bon nom ; le téléphone voit la
+  nouvelle liste aussitôt. On y supprime et renomme aussi les rythmes, et « Ouvrir le dossier »
+  l'affiche dans le Finder / l'Explorateur. Ces actions passent par la connexion WebSocket `/admin`,
+  acceptée seulement depuis l'ordinateur du bridge (adresse locale).
 
 ## Vérifier sans logiciel musical
 
@@ -169,6 +175,9 @@ Envoyé par le bridge à l'app :
 
 - `note` avec `"state": "off"` envoie un vrai Note Off (0x80).
 - `pitchbend` : -8192 (bas) … 0 (centre) … 8191 (haut).
+- `{"type": "velocity", "keys": {"62": -20}}` (1.3.0) : correction de vélocité par touche du clavier
+  maître (−50 … +50 %), appliquée à la touche jouée, sur toutes les pistes. `key` renvoie alors la
+  vélocité jouée (`velocity`) et envoyée (`sent`).
 - `ping` → le bridge répond `{ "type": "pong" }` (l'app coupe sans pong pendant 5 s).
 - Un message invalide est ignoré et signalé dans le terminal.
 - Code de fermeture `4001` : connexion remplacée par un autre appareil.

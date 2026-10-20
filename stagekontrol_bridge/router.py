@@ -13,6 +13,8 @@ Règles :
 - Un canal retiré du routage pendant que le sustain est enfoncé reçoit un sustain relâché.
 - Une note transposée hors de 0–127 n'est pas jouée sur ce canal.
 - Program Change, SysEx, horloge… du clavier sont ignorés (l'app gère les timbres).
+- Correction de vélocité par touche (calibration du clavier, réglée dans l'app) : appliquée à la
+  touche jouée, sur toutes les pistes, en pourcentage (−50 % … +50 %), résultat borné à 1–127.
 """
 
 from __future__ import annotations
@@ -28,6 +30,16 @@ SUSTAIN = 64
 PLAYING_CCS = frozenset({1, 11, 64, 66, 67})
 
 
+MAX_KEY_CORRECTION = 50
+
+
+def adjust_velocity(velocity: int, percent: int) -> int:
+    """Vélocité corrigée d'un pourcentage, bornée à 1–127 (une note jouée ne devient jamais muette)."""
+    if not percent:
+        return velocity
+    return max(1, min(127, round(velocity * (100 + percent) / 100)))
+
+
 @dataclass(frozen=True)
 class Target:
     channel: int  # 1–16, comme dans l'app
@@ -39,8 +51,11 @@ class Target:
 class Router:
     def __init__(self, send: Callable[[mido.Message], None]) -> None:
         self._send = send
-        # Appelé à chaque touche enfoncée (apprentissage des zones dans l'app).
-        self.on_key: Callable[[int], None] | None = None
+        # Appelé à chaque touche enfoncée (apprentissage des zones, calibration) :
+        # note jouée, vélocité jouée, vélocité envoyée après correction.
+        self.on_key: Callable[[int, int, int], None] | None = None
+        # Correction de vélocité par touche (note jouée → pourcentage).
+        self.key_velocity: dict[int, int] = {}
         self._lock = threading.Lock()
         self.targets: list[Target] = []
         # (canal d'entrée, note jouée) → [(canal de sortie 0–15, note envoyée)]
@@ -60,13 +75,18 @@ class Router:
                 for ch in sorted(removed):
                     self._send(mido.Message("control_change", channel=ch, control=SUSTAIN, value=0))
 
+    def set_key_velocity(self, corrections: dict[int, int]) -> None:
+        with self._lock:
+            self.key_velocity = {n: p for n, p in corrections.items() if p}
+
     def handle(self, msg: mido.Message) -> None:
         """Message reçu du clavier (appelé depuis le thread d'entrée MIDI)."""
         with self._lock:
             if msg.type == "note_on" and msg.velocity > 0:
-                self._note_on(msg)
+                velocity = adjust_velocity(msg.velocity, self.key_velocity.get(msg.note, 0))
+                self._note_on(msg.copy(velocity=velocity))
                 if self.on_key:
-                    self.on_key(msg.note)
+                    self.on_key(msg.note, msg.velocity, velocity)
             elif msg.type in ("note_off", "note_on"):
                 self._note_off(msg)
             elif msg.type == "control_change":

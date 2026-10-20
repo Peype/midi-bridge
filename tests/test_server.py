@@ -90,6 +90,19 @@ def test_touche_du_clavier_renvoyee_a_l_app():
                 await asyncio.sleep(0.05)
                 # La touche arrive sur un autre thread, comme depuis l'entrée MIDI.
                 await asyncio.to_thread(router.handle, mido.Message("note_on", note=36, velocity=80))
-                assert json.loads(await asyncio.wait_for(ws.recv(), 2)) == {"type": "key", "note": 36}
+                assert json.loads(await asyncio.wait_for(ws.recv(), 2)) == {
+                    "type": "key",
+                    "note": 36,
+                    "velocity": 80,
+                    "sent": 80,
+                }
 
     asyncio.run(scenario())
+
+
+def test_limite_des_en_tetes_relevee_pour_les_cookies_du_navigateur():
+    """Les cookies « localhost » du navigateur dépassent souvent 8 Ko : la page doit s'ouvrir quand même."""
+    import stagekontrol_bridge  # noqa: F401  (fixe la limite avant websockets)
+    from websockets import http11
+
+    assert http11.MAX_LINE_LENGTH >= 64 * 1024

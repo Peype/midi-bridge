@@ -200,7 +200,14 @@ class TestProtocole:
         box = RhythmBox(tmp_path, sent.append, log=lambda _t: None)
         box.player._threaded = False
         box.handle({"type": "rhythm-list"}, replies.append)
-        assert replies[0] == {"type": "rhythms", "folder": str(tmp_path), "styles": [{"name": "Salegy", "parts": ["A"]}]}
+        from stagekontrol_bridge import __version__
+
+        assert replies[0] == {
+            "type": "rhythms",
+            "folder": str(tmp_path),
+            "styles": [{"name": "Salegy", "parts": ["A"]}],
+            "version": __version__,
+        }
         box.handle({"type": "rhythm", "action": "play", "style": "Salegy", "tempo": 96, "channel": 10}, replies.append)
         assert box.player.playing and box.player.channel == 9 and box.player.tempo == 96
         box.handle({"type": "rhythm", "action": "play", "style": "Absent"}, replies.append)
@@ -235,3 +242,67 @@ class TestSynchronisation:
         box.handle({"type": "time", "t": 123.5}, replies.append)
         assert replies[0]["type"] == "time" and replies[0]["t"] == 123.5
         assert isinstance(replies[0]["server"], float)
+
+
+class TestImportDepuisLaPage:
+    def test_import_verifie_et_range_sous_le_bon_nom(self, tmp_path: Path):
+        lib = Library(tmp_path / "Rythmes")
+        data = _bytes(midi_file(GROOVE))
+        assert lib.save("  Salegy ", "fill", data) == ("Salegy", "Break")
+        assert (tmp_path / "Rythmes" / "Salegy - Break.mid").read_bytes() == data
+        assert lib.describe() == [{"name": "Salegy", "parts": ["Break"]}]
+
+    def test_meme_style_autres_majuscules_et_remplacement_d_une_partie(self, tmp_path: Path):
+        lib = Library(tmp_path)
+        lib.save("Salegy", "A", _bytes(midi_file(GROOVE)))
+        lib.save("salegy", "A", _bytes(midi_file(FILL)))
+        assert [p.name for p in tmp_path.iterdir()] == ["Salegy - A.mid"]
+        assert read_pattern(mido.MidiFile(tmp_path / "Salegy - A.mid")).events[0].note == SNARE
+
+    def test_refuse_un_fichier_qui_n_est_pas_un_rythme(self, tmp_path: Path):
+        lib = Library(tmp_path)
+        for style, part, data in [("S", "A", b"pas du midi"), ("S", "A", b""), ("", "A", _bytes(midi_file(GROOVE))),
+                                  ("S", "A", _bytes(midi_file([])))]:
+            with pytest.raises(RhythmError):
+                lib.save(style, part, data)
+        assert list(tmp_path.iterdir()) == []
+
+    def test_nom_de_style_sans_caracteres_interdits(self):
+        from stagekontrol_bridge.rhythm import clean_style
+
+        assert clean_style('  Sa/le:gy?  ') == "Sa le gy"
+        assert clean_style("...") == ""
+
+    def test_supprimer_et_renommer(self, tmp_path: Path):
+        lib = Library(tmp_path)
+        lib.save("Salegy", "A", _bytes(midi_file(GROOVE)))
+        lib.save("Salegy", "Break", _bytes(midi_file(FILL)))
+        lib.save("Pop", "A", _bytes(midi_file(GROOVE)))
+        assert lib.delete("Salegy", "Break") == 1
+        assert lib.rename("Salegy", "Salegy 6/8") == "Salegy 6 8"
+        with pytest.raises(RhythmError):
+            lib.rename("Pop", "salegy 6 8")
+        assert lib.describe() == [{"name": "Pop", "parts": ["A"]}, {"name": "Salegy 6 8", "parts": ["A"]}]
+        assert lib.delete("Pop") == 1
+
+    def test_demandes_de_la_page_et_nouvelle_liste_pour_le_telephone(self, tmp_path: Path):
+        import base64
+
+        replies, published = [], []
+        box = RhythmBox(tmp_path, lambda _m: None, broadcast=published.append, log=lambda _t: None)
+        data = base64.b64encode(_bytes(midi_file(GROOVE))).decode()
+        box.admin({"type": "rhythm-upload", "name": "f0", "style": "Salegy", "part": "A", "data": data}, replies.append)
+        assert replies[-1] == {"type": "rhythm-saved", "style": "Salegy", "part": "A", "name": "f0"}
+        assert published[-1]["styles"] == [{"name": "Salegy", "parts": ["A"]}]
+        box.admin({"type": "rhythm-upload", "name": "f1", "style": "X", "part": "A", "data": "@@@"}, replies.append)
+        assert replies[-1]["type"] == "rhythm-error" and replies[-1]["name"] == "f1"
+        box.admin({"type": "rhythm-delete", "style": "Salegy"}, replies.append)
+        assert published[-1]["styles"] == []
+
+
+def _bytes(mid: mido.MidiFile) -> bytes:
+    import io
+
+    buf = io.BytesIO()
+    mid.save(file=buf)
+    return buf.getvalue()

@@ -9,7 +9,10 @@ Messages reçus de l'app (canaux en 1–16 dans le JSON ; seul le bridge convert
     {"type": "routing", "targets": [{"channel": 1, "octave": 0, "low": 60, "high": 127}, …]}
         → routage du clavier maître (voir router.py) ; low/high (zone) facultatifs, 0–127 par défaut
 Messages envoyés à l'app :
-    {"type": "key", "note": 60}  → touche enfoncée sur le clavier maître (apprentissage des zones)
+    {"type": "key", "note": 60, "velocity": 112, "sent": 90}  → touche enfoncée sur le clavier maître
+        (apprentissage des zones, calibration : vélocité jouée et envoyée après correction)
+Reçu aussi :
+    {"type": "velocity", "keys": {"62": -20}}  → correction de vélocité par touche (−50…50 %)
 """
 
 from __future__ import annotations
@@ -127,8 +130,33 @@ def to_targets(msg: dict[str, Any]) -> list[Target]:
     return targets
 
 
-def key_message(note: int) -> str:
-    return json.dumps({"type": "key", "note": note})
+def key_message(note: int, velocity: int | None = None, sent: int | None = None) -> str:
+    msg: dict[str, Any] = {"type": "key", "note": note}
+    if velocity is not None:
+        msg["velocity"] = velocity
+        msg["sent"] = sent if sent is not None else velocity
+    return json.dumps(msg)
+
+
+def is_velocity(msg: dict[str, Any]) -> bool:
+    return msg.get("type") == "velocity"
+
+
+def to_key_velocity(msg: dict[str, Any]) -> dict[int, int]:
+    """Corrections de vélocité par touche : {"keys": {"62": -20, …}} (note 0–127 → −50…50 %)."""
+    raw = msg.get("keys")
+    if not isinstance(raw, dict) or len(raw) > 128:
+        raise ProtocolError("« keys » doit associer au plus 128 touches à un pourcentage")
+    out: dict[int, int] = {}
+    for key, value in raw.items():
+        try:
+            note = int(key)
+        except (TypeError, ValueError) as e:
+            raise ProtocolError(f"touche invalide : {key!r}") from e
+        if not 0 <= note <= 127 or not isinstance(value, int) or isinstance(value, bool) or not -50 <= value <= 50:
+            raise ProtocolError(f"correction invalide : {key!r} → {value!r}")
+        out[note] = value
+    return out
 
 
 def describe_targets(targets: list[Target]) -> str:

@@ -16,6 +16,6 @@ Laissez la fenêtre Terminal du bridge ouverte pendant que vous jouez ; fermez-l
 Page d'état à tout moment : http://localhost:8765/
 Clavier maître branché sur le Mac : désactivez-le comme entrée MIDI directe dans votre logiciel.
 
-Boîte à rythme : déposez vos rythmes de batterie (fichiers MIDI) dans le dossier
-StageKontrol/Rythmes de votre dossier personnel, nommés « Style - Partie.mid »
-(ex. « Salegy - A.mid », « Salegy - Break.mid »). L'app les liste dans « Rythme ».
+Boîte à rythme : sur la page du bridge (http://localhost:8765/), section « Rythmes »,
+glissez vos rythmes de batterie (fichiers MIDI .mid) et choisissez le style et la partie.
+L'app les liste aussitôt dans « Rythme ».

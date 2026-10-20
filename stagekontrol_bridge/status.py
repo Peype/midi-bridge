@@ -3,7 +3,9 @@
 Elle s'ouvre dans le navigateur au lancement et montre :
 - le QR code à scanner avec le téléphone (lien stagekontrol://connect?host=…&port=…) ;
 - l'appareil connecté (Wi-Fi ou USB), les claviers détectés ;
-- l'état du port MIDI (sur Windows : que faire si le port loopMIDI manque).
+- l'état du port MIDI (sur Windows : que faire si le port loopMIDI manque) ;
+- les rythmes de la boîte à rythme : import par glisser-déposer, suppression, renommage (via la
+  connexion WebSocket « /admin », réservée à l'ordinateur lui-même).
 """
 
 from __future__ import annotations
@@ -124,6 +126,28 @@ PAGE = """<!doctype html>
   a { color: var(--yellow); }
   code { background: #0d1117; padding: 1px 6px; border-radius: 6px; }
   .stack { display: grid; gap: 16px; }
+  .wide { margin-top: 16px; }
+  .head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  button { background: #262d38; color: var(--text); border: 1px solid var(--line); border-radius: 8px;
+           padding: 6px 12px; font: inherit; font-size: 14px; cursor: pointer; }
+  button:hover { border-color: var(--yellow); }
+  button.go { background: var(--yellow); color: #111; border-color: var(--yellow); font-weight: 600; }
+  button.danger:hover { border-color: var(--bad); color: var(--bad); }
+  input, select { background: #0d1117; color: var(--text); border: 1px solid var(--line); border-radius: 8px;
+                  padding: 6px 8px; font: inherit; font-size: 14px; }
+  .drop { border: 2px dashed var(--line); border-radius: 12px; padding: 18px; text-align: center; color: var(--dim);
+          cursor: pointer; margin: 10px 0; }
+  .drop.over { border-color: var(--yellow); color: var(--text); }
+  .style { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 0; border-top: 1px solid var(--line); }
+  .style b { min-width: 140px; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; background: #0d1117; border: 1px solid var(--line);
+          border-radius: 999px; padding: 2px 4px 2px 10px; font-size: 14px; }
+  .chip button { padding: 0 6px; border: none; background: none; color: var(--dim); }
+  .chip button:hover { color: var(--bad); }
+  .pending { display: grid; grid-template-columns: 1fr 170px 110px auto auto; gap: 8px; align-items: center; padding: 6px 0; }
+  @media (max-width: 720px) { .pending { grid-template-columns: 1fr 1fr; } }
+  .msg-ok { color: var(--ok); } .msg-bad { color: var(--bad); }
+  .playing { color: var(--ok); font-size: 13px; }
 </style>
 </head>
 <body>
@@ -153,6 +177,21 @@ PAGE = """<!doctype html>
         <div id="keys"></div>
       </div>
     </div>
+  </div>
+  <div class="card wide" id="rhythms-card">
+    <div class="head">
+      <h2>Rythmes (boîte à rythme)</h2>
+      <button id="open-folder" title="Ouvrir le dossier des rythmes">Ouvrir le dossier</button>
+    </div>
+    <p class="muted">Ajoutez vos rythmes de batterie (fichiers MIDI .mid) : glissez-les ici, choisissez le style
+      et la partie (A et B tournent en boucle, Intro et Break une fois, Fin arrête). Le téléphone les voit
+      aussitôt dans « Rythme ».</p>
+    <div class="drop" id="drop">Glissez vos fichiers .mid ici, ou <u>cliquez pour les choisir</u>
+      <input type="file" id="file" accept=".mid,.midi,audio/midi" multiple hidden></div>
+    <div id="pending"></div>
+    <div id="rmsg" class="muted"></div>
+    <datalist id="style-names"></datalist>
+    <div id="rlist"></div>
   </div>
   <p class="muted" id="foot"></p>
 </main>
@@ -205,6 +244,116 @@ PAGE = """<!doctype html>
   }
   refresh();
   setInterval(refresh, 1000);
+
+  // --- Rythmes : connexion « /admin » (seulement depuis cet ordinateur) ---
+  const PARTS = ['Intro', 'A', 'B', 'C', 'Break', 'Fin'];
+  const ALIASES = { a: 'A', b: 'B', c: 'C', intro: 'Intro', break: 'Break', fill: 'Break', roulement: 'Break',
+                    fin: 'Fin', ending: 'Fin', end: 'Fin', outro: 'Fin' };
+  let ws = null, styles = [], playing = null, pendingId = 0;
+  const pending = new Map();
+
+  function connectAdmin() {
+    ws = new WebSocket(`ws://${location.host}/admin`);
+    ws.onopen = () => ws.send(JSON.stringify({ type: 'rhythm-list' }));
+    ws.onclose = () => setTimeout(connectAdmin, 2000);
+    ws.onmessage = (e) => {
+      const m = JSON.parse(e.data);
+      if (m.type === 'rhythms') { styles = m.styles; renderList(); }
+      else if (m.type === 'rhythm-state') { playing = m.playing ? m.style : null; renderList(); }
+      else if (m.type === 'rhythm-saved') finishPending(m.name, true, `Importé : ${m.style} - ${m.part}`);
+      else if (m.type === 'rhythm-error') {
+        if (m.name && pending.has(m.name)) finishPending(m.name, false, m.message);
+        else message(m.message, false);
+      }
+    };
+  }
+  const send = (msg) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg)); else message('Bridge non joignable.', false); };
+  const message = (text, ok) => { $('rmsg').innerHTML = text ? `<span class="${ok ? 'msg-ok' : 'msg-bad'}">${esc(text)}</span>` : ''; };
+
+  function renderList() {
+    $('style-names').innerHTML = styles.map((s) => `<option value="${esc(s.name)}">`).join('');
+    $('rlist').innerHTML = styles.length
+      ? styles.map((s, i) => `<div class="style"><b>${esc(s.name)}</b>
+          ${s.parts.map((p) => `<span class="chip">${esc(p)}<button title="Supprimer cette partie" data-del="${i}" data-part="${esc(p)}">✕</button></span>`).join('')}
+          ${playing === s.name ? '<span class="playing">● en cours</span>' : ''}
+          <span style="flex:1"></span>
+          <button data-rename="${i}">Renommer</button>
+          <button class="danger" data-delstyle="${i}">Supprimer</button></div>`).join('')
+      : '<p class="muted">Aucun rythme pour l’instant.</p>';
+  }
+
+  $('rlist').addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    if (b.dataset.del !== undefined) {
+      const s = styles[+b.dataset.del];
+      if (confirm(`Supprimer la partie ${b.dataset.part} de « ${s.name} » ?`)) send({ type: 'rhythm-delete', style: s.name, part: b.dataset.part });
+    } else if (b.dataset.delstyle !== undefined) {
+      const s = styles[+b.dataset.delstyle];
+      if (confirm(`Supprimer le rythme « ${s.name} » et toutes ses parties ?`)) send({ type: 'rhythm-delete', style: s.name });
+    } else if (b.dataset.rename !== undefined) {
+      const s = styles[+b.dataset.rename];
+      const to = prompt(`Nouveau nom pour « ${s.name} » :`, s.name);
+      if (to && to.trim() && to.trim() !== s.name) send({ type: 'rhythm-rename', style: s.name, to: to.trim() });
+    }
+  });
+
+  // Style et partie devinés à partir du nom « Style - Partie.mid » (modifiables avant l'import).
+  function guess(filename) {
+    const stem = filename.replace(/\\.midi?$/i, '');
+    const i = stem.lastIndexOf(' - ');
+    if (i < 0) return { style: stem.trim(), part: 'A' };
+    const raw = stem.slice(i + 3).trim();
+    return { style: stem.slice(0, i).trim(), part: ALIASES[raw.toLowerCase()] || raw };
+  }
+
+  function addFiles(files) {
+    message('');
+    for (const f of files) {
+      if (!/\\.midi?$/i.test(f.name)) { message(`« ${f.name} » n'est pas un fichier .mid`, false); continue; }
+      const id = `f${pendingId++}`;
+      const g = guess(f.name);
+      pending.set(id, f);
+      const parts = PARTS.includes(g.part) ? PARTS : [...PARTS, g.part];
+      const row = document.createElement('div');
+      row.className = 'pending'; row.id = id;
+      row.innerHTML = `<span>${esc(f.name)} <span class="muted">(${Math.ceil(f.size / 1024)} Ko)</span><div class="muted" data-status></div></span>
+        <input list="style-names" data-style value="${esc(g.style)}" placeholder="Style (ex. Salegy)">
+        <select data-part>${parts.map((p) => `<option${p === g.part ? ' selected' : ''}>${esc(p)}</option>`).join('')}</select>
+        <button class="go" data-go>Importer</button><button data-cancel>Retirer</button>`;
+      $('pending').appendChild(row);
+    }
+  }
+
+  $('pending').addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    const row = b.closest('.pending'); const id = row.id;
+    if (b.dataset.cancel !== undefined) { pending.delete(id); row.remove(); return; }
+    const style = row.querySelector('[data-style]').value.trim();
+    const part = row.querySelector('[data-part]').value;
+    if (!style) { row.querySelector('[data-status]').innerHTML = '<span class="msg-bad">Indiquez le style.</span>'; return; }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const data = String(reader.result).split(',')[1] || '';
+      row.querySelector('[data-status]').textContent = 'Envoi…';
+      send({ type: 'rhythm-upload', name: id, style, part, data });
+    };
+    reader.readAsDataURL(pending.get(id));
+  });
+
+  function finishPending(id, ok, text) {
+    const row = document.getElementById(id); if (!row) { message(text, ok); return; }
+    if (ok) { pending.delete(id); row.remove(); message(text, true); }
+    else row.querySelector('[data-status]').innerHTML = `<span class="msg-bad">${esc(text)}</span>`;
+  }
+
+  const drop = $('drop');
+  drop.addEventListener('click', () => $('file').click());
+  $('file').addEventListener('change', (e) => { addFiles(e.target.files); e.target.value = ''; });
+  drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
+  drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+  drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); addFiles(e.dataTransfer.files); });
+  $('open-folder').addEventListener('click', () => send({ type: 'rhythm-open-folder' }));
+  connectAdmin();
 </script>
 </body>
 </html>

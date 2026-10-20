@@ -22,15 +22,22 @@ from .protocol import (
     describe_targets,
     is_ping,
     is_routing,
+    is_velocity,
     key_message,
     parse,
     to_midi,
+    to_key_velocity,
     to_targets,
 )
 from .rhythm import RhythmBox, is_rhythm
 from .router import Router
 
 Log = Callable[[str], None]
+
+# Adresse WebSocket de la page d'état (gestion des rythmes), réservée à l'ordinateur lui-même.
+ADMIN_PATH = "/admin"
+LOOPBACK = frozenset({"127.0.0.1", "::1", "::ffff:127.0.0.1"})
+CLOSE_FORBIDDEN = 4003
 
 
 def stamp() -> str:
@@ -60,8 +67,13 @@ class Bridge:
         # Boîte à rythme (fichiers MIDI joués par le bridge), branchée par __main__.
         self.rhythms: RhythmBox | None = None
         self.loop: asyncio.AbstractEventLoop | None = None
+        # Pages d'état ouvertes sur l'ordinateur (gestion des rythmes), en plus du téléphone.
+        self.admins: set[ServerConnection] = set()
 
     async def handle(self, ws: ServerConnection) -> None:
+        if ws.request is not None and ws.request.path.split("?", 1)[0] == ADMIN_PATH:
+            await self.handle_admin(ws)
+            return
         peer = f"{ws.remote_address[0]}:{ws.remote_address[1]}" if ws.remote_address else "?"
         previous, self.current = self.current, ws
         if previous is not None:
@@ -75,6 +87,27 @@ class Bridge:
             if self.current is ws:
                 self.current = None
             self.log(f"- appareil déconnecté ({peer})")
+
+    async def handle_admin(self, ws: ServerConnection) -> None:
+        """
+        Page d'état (gestion des rythmes) : seulement depuis l'ordinateur lui-même, pour qu'un autre
+        appareil du réseau ne puisse pas modifier les fichiers. Ne remplace jamais le téléphone.
+        """
+        host = str(ws.remote_address[0]) if ws.remote_address else ""
+        if host not in LOOPBACK:
+            await ws.close(code=CLOSE_FORBIDDEN, reason="réservé à l'ordinateur du bridge")
+            return
+        self.admins.add(ws)
+        try:
+            async for raw in ws:
+                try:
+                    msg = parse(raw)
+                except ProtocolError:
+                    continue
+                if self.rhythms is not None:
+                    self.rhythms.admin(msg, lambda value: asyncio.ensure_future(ws.send(json.dumps(value))))
+        finally:
+            self.admins.discard(ws)
 
     def receive(self, ws: ServerConnection, raw: str | bytes) -> None:
         """Message reçu en Wi-Fi (WebSocket)."""
@@ -101,6 +134,13 @@ class Bridge:
                     self.router.set_targets(targets)
                     self.log(f"= clavier → {describe_targets(targets)}")
                 return
+            if is_velocity(msg):
+                corrections = to_key_velocity(msg)
+                if self.router is not None:
+                    # Conservée si l'app se déconnecte, comme le routage.
+                    self.router.set_key_velocity(corrections)
+                self.log(f"= vélocité corrigée sur {sum(1 for p in corrections.values() if p)} touche(s)")
+                return
             if is_rhythm(msg):
                 if self.rhythms is not None:
                     self.rhythms.handle(msg, lambda value: reply(json.dumps(value)))
@@ -117,13 +157,14 @@ class Bridge:
         if self.verbose:
             self.log(f"→ {describe(midi)}")
 
-    def _send_key(self, note: int) -> None:
+    def _send_key(self, note: int, velocity: int, sent: int) -> None:
+        text = key_message(note, velocity, sent)
         ws = self.current
         if ws is not None:
-            asyncio.ensure_future(ws.send(key_message(note)))
+            asyncio.ensure_future(ws.send(text))
         # Téléphones branchés en USB : même message, en SysEx.
         for phone in list(self.usb_phones()):
-            phone.send_control({"type": "key", "note": note})
+            phone.send_control(json.loads(text))
 
     def broadcast(self, value: dict) -> None:
         """Message pour l'app (Wi-Fi et USB), envoyable depuis n'importe quel fil d'exécution."""
@@ -132,9 +173,10 @@ class Bridge:
             return
 
         def send() -> None:
-            ws = self.current
-            if ws is not None:
-                asyncio.ensure_future(ws.send(json.dumps(value)))
+            text = json.dumps(value)
+            for ws in [self.current, *self.admins]:
+                if ws is not None:
+                    asyncio.ensure_future(ws.send(text))
             for phone in list(self.usb_phones()):
                 phone.send_control(value)
 
@@ -155,7 +197,9 @@ class Bridge:
         if self.router is not None:
             # Les touches arrivent sur le thread MIDI : on repasse sur la boucle asyncio pour l'envoi.
             loop = asyncio.get_running_loop()
-            self.router.on_key = lambda note: loop.call_soon_threadsafe(self._send_key, note)
+            self.router.on_key = lambda note, velocity, sent: loop.call_soon_threadsafe(
+                self._send_key, note, velocity, sent
+            )
         self.loop = asyncio.get_running_loop()
         # process_request : page d'état HTTP servie sur le même port (voir status.py).
         return await serve(self.handle, host, port, process_request=process_request)

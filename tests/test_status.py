@@ -89,3 +89,21 @@ def test_port_midi_qui_arrive_apres_le_lancement():
     out.send(mido.Message("control_change", control=7, value=2))
     assert opened[0].sent[0].value == 2
     assert out.retry() is False  # déjà ouvert
+
+
+def test_javascript_de_la_page_valide(tmp_path):
+    """Une apostrophe mal échappée casserait toute la page : on vérifie la syntaxe avec Node."""
+    import shutil
+    import subprocess
+
+    import pytest
+
+    from stagekontrol_bridge.status import PAGE
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node n'est pas installé")
+    script = tmp_path / "page.js"
+    script.write_text(PAGE.split("<script>")[1].split("</script>")[0], encoding="utf-8")
+    result = subprocess.run([node, "--check", str(script)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr

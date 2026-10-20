@@ -81,3 +81,14 @@ def test_pitch_bend():
 
     with pytest.raises(ProtocolError):
         to_midi({"type": "midi", "message": "pitchbend", "channel": 1, "value": 9000})
+
+
+def test_corrections_de_velocite():
+    import pytest
+
+    from stagekontrol_bridge.protocol import ProtocolError, to_key_velocity
+
+    assert to_key_velocity({"type": "velocity", "keys": {"62": -20, "70": 15}}) == {62: -20, 70: 15}
+    for bad in ({"keys": {"200": 10}}, {"keys": {"60": 80}}, {"keys": {"x": 1}}, {"keys": []}, {"keys": {"60": True}}):
+        with pytest.raises(ProtocolError):
+            to_key_velocity(bad)
